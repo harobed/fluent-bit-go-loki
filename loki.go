@@ -7,14 +7,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
 type lokiConfig struct {
-	url       flagext.URLValue
-	batchWait time.Duration
-	batchSize int
-	labelSet  model.LabelSet
+	url           flagext.URLValue
+	batchWait     time.Duration
+	batchSize     int
+	extraLabels   model.LabelSet
+	labelKeys     []string
+	dropSingleKey bool
 }
 
 type labelSetJSON struct {
@@ -24,7 +27,7 @@ type labelSetJSON struct {
 	} `json:"labels"`
 }
 
-func getLokiConfig(url string, batchWait string, batchSize string, labels string) (*lokiConfig, error) {
+func getLokiConfig(url string, batchWait string, batchSize string, extraLabels string, labelKeys string, dropSingleKey string) (*lokiConfig, error) {
 	lc := &lokiConfig{}
 	var clientURL flagext.URLValue
 	if url == "" {
@@ -49,18 +52,22 @@ func getLokiConfig(url string, batchWait string, batchSize string, labels string
 	lc.batchSize = batchSizeValue * 1024
 
 	var labelValues labelSetJSON
-	if labels == "" {
-		labels = `
-{"labels": [{"key": "job", "label": "fluent-bit"}]}
-`
+	if extraLabels == "" {
+		extraLabels = `{"labels": [{"key": "job", "label": "fluent-bit"}]}`
 	}
 
-	json.Unmarshal(([]byte)(labels), &labelValues)
-	labelSet := make(model.LabelSet)
+	json.Unmarshal(([]byte)(extraLabels), &labelValues)
+	lc.extraLabels = make(model.LabelSet)
 	for _, v := range labelValues.Labels {
-		labelSet[model.LabelName(v.Key)] = model.LabelValue(v.Label)
+		lc.extraLabels[model.LabelName(v.Key)] = model.LabelValue(v.Label)
 	}
-	lc.labelSet = labelSet
+
+	lc.labelKeys = strings.Split(labelKeys, ",")
+	for i, v := range lc.labelKeys {
+		lc.labelKeys[i] = strings.Trim(v, " ")
+	}
+
+	lc.dropSingleKey = (dropSingleKey == "true") || (dropSingleKey == "1")
 
 	return lc, nil
 }

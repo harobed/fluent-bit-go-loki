@@ -32,12 +32,14 @@ $ make
 
 ### Configuration Options
 
-| Key           | Description                                   | Default                             |
-| --------------|-----------------------------------------------|-------------------------------------|
-| Url           | Url of loki server API endpoint               | http://localhost:3100/api/prom/push |
-| BatchWait     | Waiting time for batch operation (unit: msec) | 10 milliseconds                     |
-| Url           | Batch size for batch operation (unit: KiB)    | 10 KiB                              |
-| Labels        | labels for API requests                       | job="fluent-bit" (describe below)   |
+* `Url`: Url of loki server API endpoint (defalut value: `http://localhost:3100/api/prom/push`)
+* `BatchWait`: Waiting time for batch operation (unit: msec) (default value: 10 milliseconds)
+* `BatchSize`: Batch size for batch operation (unit: KiB) (default value: 10 KiB)
+* `ExtraLabels`: Set of labels to include with every Loki stream  (default: `job="fluent-bit"`)
+* `LabelKeys`: Comma separated list of keys to use as stream labels. <br />
+               All other keys will be placed into the log line.
+* `LineFormat`: Format to use when flattening the record to a log line. Valid values are "json" or "key_value". If set to "json" the log line sent to Loki will be the fluentd record (excluding any keys extracted out as labels) dumped as json. If set to "key_value", the log line will be each item in the record concatenated together (separated by a single space) in the format <key>=<value>.
+* `DropSingleKey`: if set to true and after extracting label_keys a record only has a single key remaining, the log line sent to Loki will just be the value of the record key.
 
 Example:
 

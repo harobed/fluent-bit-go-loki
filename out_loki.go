@@ -4,9 +4,9 @@ import "github.com/fluent/fluent-bit-go/output"
 import "github.com/grafana/loki/pkg/promtail/client"
 import "github.com/sirupsen/logrus"
 import kit "github.com/go-kit/kit/log/logrus"
-import "github.com/prometheus/common/model"
 import "github.com/cortexproject/cortex/pkg/util/flagext"
 import "github.com/json-iterator/go"
+import "github.com/prometheus/common/model"
 
 import (
 	"C"
@@ -17,7 +17,7 @@ import (
 )
 
 var loki *client.Client
-var ls model.LabelSet
+var config *lokiConfig
 var plugin GoOutputPlugin = &fluentPlugin{}
 
 type GoOutputPlugin interface {
@@ -25,7 +25,7 @@ type GoOutputPlugin interface {
 	Unregister(ctx unsafe.Pointer)
 	GetRecord(dec *output.FLBDecoder) (ret int, ts interface{}, rec map[interface{}]interface{})
 	NewDecoder(data unsafe.Pointer, length int) *output.FLBDecoder
-	HandleLine(ls model.LabelSet, timestamp time.Time, line string) error
+	HandleLine(timestamp time.Time, record map[interface{}]interface{}) error
 	Exit(code int)
 }
 
@@ -51,8 +51,42 @@ func (p *fluentPlugin) Exit(code int) {
 	os.Exit(code)
 }
 
-func (p *fluentPlugin) HandleLine(ls model.LabelSet, timestamp time.Time, line string) error {
-	return loki.Handle(ls, timestamp, line)
+func (p *fluentPlugin) HandleLine(timestamp time.Time, record map[interface{}]interface{}) error {
+	var err error
+	var line []byte
+	m := make(map[string]interface{})
+	labels := config.extraLabels.Clone()
+
+	var strValue string
+
+RecordLoop:
+	for k, v := range record {
+		switch t := v.(type) {
+		case []byte:
+			// prevent encoding to base64
+			strValue = string(t)
+		default:
+			strValue = v.(string)
+		}
+
+		for _, label := range config.labelKeys {
+			if k == label {
+				labels[model.LabelName(k.(string))] = model.LabelValue(strValue)
+				continue RecordLoop
+			}
+		}
+		m[k.(string)] = strValue
+		line = []byte(strValue)
+	}
+
+	if !config.dropSingleKey {
+		line, err = jsoniter.Marshal(m)
+		if err != nil {
+			return err
+		}
+	}
+
+	return loki.Handle(labels, timestamp, string(line))
 }
 
 //export FLBPluginRegister
@@ -64,22 +98,26 @@ func FLBPluginRegister(ctx unsafe.Pointer) int {
 // (fluentbit will call this)
 // ctx (context) pointer to fluentbit context (state/ c code)
 func FLBPluginInit(ctx unsafe.Pointer) int {
-	// Example to retrieve an optional configuration parameter
-	url := plugin.PluginConfigKey(ctx, "URL")
-	batchWait := plugin.PluginConfigKey(ctx, "BatchWait")
-	batchSize := plugin.PluginConfigKey(ctx, "BatchSize")
-	labels := plugin.PluginConfigKey(ctx, "Labels")
-
-	config, err := getLokiConfig(url, batchWait, batchSize, labels)
+	var err error
+	config, err = getLokiConfig(
+		plugin.PluginConfigKey(ctx, "URL"),
+		plugin.PluginConfigKey(ctx, "BatchWait"),
+		plugin.PluginConfigKey(ctx, "BatchSize"),
+		plugin.PluginConfigKey(ctx, "ExtraLabels"),
+		plugin.PluginConfigKey(ctx, "LabelKeys"),
+		plugin.PluginConfigKey(ctx, "DropSingleKey"),
+	)
 	if err != nil {
 		plugin.Unregister(ctx)
 		plugin.Exit(1)
 		return output.FLB_ERROR
 	}
-	fmt.Printf("[flb-go] plugin URL parameter = '%s'\n", url)
-	fmt.Printf("[flb-go] plugin BatchWait parameter = '%s'\n", batchSize)
-	fmt.Printf("[flb-go] plugin BatchSize parameter = '%s'\n", batchWait)
-	fmt.Printf("[flb-go] plugin Labels parameter = '%s'\n", labels)
+	fmt.Printf("[loki] URL parameter = '%s'\n", config.url)
+	fmt.Printf("[loki] BatchWait parameter = '%d'\n", config.batchSize)
+	fmt.Printf("[loki] BatchSize parameter = '%s'\n", config.batchWait.String())
+	fmt.Printf("[loki] ExtraLabels parameter = '%s'\n", config.extraLabels)
+	fmt.Printf("[loki] LabelKeys parameter = '%s'\n", config.labelKeys)
+	fmt.Printf("[loki] DropSingleKey parameter = '%t'\n", config.dropSingleKey)
 
 	cfg := client.Config{}
 	// Init everything with default values.
@@ -99,7 +137,6 @@ func FLBPluginInit(ctx unsafe.Pointer) int {
 		plugin.Exit(1)
 		return output.FLB_ERROR
 	}
-	ls = config.labelSet
 
 	return output.FLB_OK
 }
@@ -130,13 +167,13 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 			timestamp = time.Now()
 		}
 
-		line, err := createJSON(record)
-		if err != nil {
-			fmt.Printf("error creating message for Grafana Loki: %v", err)
-			continue
-		}
+		// line, err := createJSON(record)
+		// if err != nil {
+		// 	fmt.Printf("error creating message for Grafana Loki: %v", err)
+		// 	continue
+		// }
 
-		err = plugin.HandleLine(ls, timestamp, line)
+		err := plugin.HandleLine(timestamp, record)
 		if err != nil {
 			fmt.Printf("error sending message for Grafana Loki: %v", err)
 			return output.FLB_RETRY
@@ -151,26 +188,26 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 	return output.FLB_OK
 }
 
-func createJSON(record map[interface{}]interface{}) (string, error) {
-	m := make(map[string]interface{})
+// func createJSON(record map[interface{}]interface{}) (string, error) {
+// 	m := make(map[string]interface{})
 
-	for k, v := range record {
-		switch t := v.(type) {
-		case []byte:
-			// prevent encoding to base64
-			m[k.(string)] = string(t)
-		default:
-			m[k.(string)] = v
-		}
-	}
+// 	for k, v := range record {
+// 		switch t := v.(type) {
+// 		case []byte:
+// 			// prevent encoding to base64
+// 			m[k.(string)] = string(t)
+// 		default:
+// 			m[k.(string)] = v
+// 		}
+// 	}
 
-	js, err := jsoniter.Marshal(m)
-	if err != nil {
-		return "{}", err
-	}
+// 	js, err := jsoniter.Marshal(m)
+// 	if err != nil {
+// 		return "{}", err
+// 	}
 
-	return string(js), nil
-}
+// 	return string(js), nil
+// }
 
 //export FLBPluginExit
 func FLBPluginExit() int {
