@@ -167,11 +167,6 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 			timestamp = time.Now()
 		}
 
-		// line, err := createJSON(record)
-		// if err != nil {
-		// 	fmt.Printf("error creating message for Grafana Loki: %v", err)
-		// 	continue
-		// }
 
 		err := plugin.HandleLine(timestamp, record)
 		if err != nil {
@@ -187,27 +182,6 @@ func FLBPluginFlush(data unsafe.Pointer, length C.int, tag *C.char) int {
 	// output.FLB_RETRY = retry to flush later.
 	return output.FLB_OK
 }
-
-// func createJSON(record map[interface{}]interface{}) (string, error) {
-// 	m := make(map[string]interface{})
-
-// 	for k, v := range record {
-// 		switch t := v.(type) {
-// 		case []byte:
-// 			// prevent encoding to base64
-// 			m[k.(string)] = string(t)
-// 		default:
-// 			m[k.(string)] = v
-// 		}
-// 	}
-
-// 	js, err := jsoniter.Marshal(m)
-// 	if err != nil {
-// 		return "{}", err
-// 	}
-
-// 	return string(js), nil
-// }
 
 //export FLBPluginExit
 func FLBPluginExit() int {
